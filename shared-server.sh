@@ -17,6 +17,9 @@ rm -f "$SOCK"
 # которую обновляет codex-app-tools-link (вызывается из codex-shared-launch).
 "$(dirname "$(readlink -f "$0")")/codex-app-tools-link" >/dev/null 2>&1 || true
 export CODEX_APP_TOOLS_PIPE_PATH="$DIR/app-tools.sock"
+# launchd даёт процессам мягкий лимит в 256 открытых файлов, а серверу с десятками тредов и
+# MCP-серверов нужно намного больше (иначе «Too many open files» при запуске MCP).
+ulimit -n 65536 2>/dev/null || ulimit -n 10240 2>/dev/null || true
 # Время старта: codex-shared-helper перезапустит сервер, если Codex обновился (бинарник новее).
 date +%s > "$DIR/server.started"
 export LOG_FORMAT=json RUST_LOG=warn CODEX_INTERNAL_ORIGINATOR_OVERRIDE=Codex CODEX_SHELL=1 \

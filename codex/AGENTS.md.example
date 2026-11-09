@@ -15,3 +15,28 @@
   непроверенное за проверенное.
 - Если пользователь спрашивает, что обсуждалось или решалось с Claude, используй
   skill `claude-context`.
+
+# Общение агентов Codex между собой
+
+- **Субагенты внутри своей задачи** — встроенные инструменты `collaboration.*`
+  (`spawn_agent`, `send_message`, `wait_agent`, `list_agents`, `followup_task`,
+  `interrupt_agent`): параллельные подзадачи с ответом в этот же тред.
+- **Отдельный тред-агент в сайдбаре** (долгая параллельная работа, за которой
+  пользователь может следить) или **сообщение в другой существующий тред** — через
+  мост `codex-bridge` (он в PATH):
+  - `codex-bridge start --title "..." --cwd <папка> --model terra|sol --effort <...> --prompt-file <файл>`
+    — модель по правилу пользователя: рутина `terra` (medium/xhigh/ultra), обычная
+    сложная работа `sol` (xhigh/max/ultra); `astra` — только если пользователь
+    явно разрешил;
+  - `codex-bridge send <thread> --prompt "..."`, `codex-bridge wait <thread> ...`,
+    `codex-bridge read <thread> --last 1`, `codex-bridge list --search "..."`.
+  - Мост сам подпишет сообщение `[Codex → Codex]` с id твоего треда (`$CODEX_THREAD_ID`).
+- Получив сообщение `[Codex → Codex]`, выполни его и дай итог в этом же треде —
+  отправитель прочитает его через `codex-bridge wait/read`. Отдельно писать
+  отправителю нужно, только если он об этом просит. В собственный тред не пиши.
+
+# Документы, таблицы, слайды, PDF
+
+Если инструмента `mcp__codex_app__load_workspace_dependencies` нет, вызывай
+`load_workspace_dependencies` MCP-сервера `codex_runtime` — он отдаёт те же пути к
+встроенному набору (Node, Python, LibreOffice, poppler, git).

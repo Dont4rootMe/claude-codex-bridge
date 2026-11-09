@@ -48,6 +48,7 @@ JOURNAL = os.path.join(STATE_DIR, "journal.jsonl")
 SHARED_SOCK = os.path.join(STATE_DIR, "app-server.sock")
 CLAUDE_PROJECTS = os.path.expanduser("~/.claude/projects")
 HEADER = "[Claude → Codex]"
+CODEX_HEADER = "[Codex → Codex]"
 FINAL = {"completed", "failed", "interrupted"}
 
 # Политика моделей пользователя (2026-11-09):
@@ -380,7 +381,24 @@ def read_prompt(args) -> str:
     die("нужен текст задачи: --prompt, --prompt-file или stdin")
 
 
-def compose(prompt: str, claude_session: str | None) -> str:
+def sender_and_session(a):
+    """Кто пишет: агент Codex (внутри его команд есть CODEX_THREAD_ID) или Claude."""
+    sender = os.environ.get("CODEX_THREAD_ID") or None
+    if a.claude_session == "none":
+        session = None
+    elif a.claude_session == "auto":
+        session = None if sender else detect_claude_session()
+    else:
+        session = a.claude_session
+    return sender, session
+
+
+def compose(prompt: str, claude_session: str | None, sender: str | None = None) -> str:
+    if sender:
+        head = (f"{CODEX_HEADER} Сообщение от агента Codex из треда {sender}. Свой итоговый ответ "
+                f"дай здесь — отправитель прочитает его сам (`codex-bridge wait/read`); написать "
+                f"ему отдельно: `codex-bridge send {sender} --prompt ...`.")
+        return head + "\n\n" + prompt.strip()
     head = f"{HEADER} Задача от Claude (тимлид)."
     if claude_session:
         head += (f" Чат Claude: {claude_session} — полный контекст обсуждения: "
@@ -402,8 +420,7 @@ def cmd_start(a):
     if not os.path.isdir(cwd):
         die(f"нет такой папки: {cwd}")
     prompt = read_prompt(a)
-    session = None if a.claude_session == "none" else (
-        detect_claude_session() if a.claude_session == "auto" else a.claude_session)
+    sender, session = sender_and_session(a)
     params = {"cwd": cwd, "model": model, "config": {"model_reasoning_effort": effort},
               "sandbox": a.sandbox, "approvalPolicy": a.approval}
     mode = bridge_mode()
@@ -414,7 +431,7 @@ def cmd_start(a):
             tid = s.call("thread/start", params)["thread"]["id"]
             s.call("thread/name/set", {"threadId": tid, "name": a.title})
             s.call("turn/start", {"threadId": tid, "input": [
-                {"type": "text", "text": compose(prompt, session)}]})
+                {"type": "text", "text": compose(prompt, session, sender)}]})
         started = True
         if a.open:
             open_in_app(tid)
@@ -424,10 +441,10 @@ def cmd_start(a):
         with AppServer() as s:
             tid = s.call("thread/start", params)["thread"]["id"]
             s.call("thread/name/set", {"threadId": tid, "name": a.title})
-        queue_message(tid, compose(prompt, session))
+        queue_message(tid, compose(prompt, session, sender))
     journal({"event": "start", "thread_id": tid, "title": a.title, "cwd": cwd, "model": model,
-             "effort": effort, "claude_session": session, "prev_turn_id": None, "mode": mode,
-             "prompt_preview": prompt.strip()[:300]})
+             "effort": effort, "claude_session": session, "from_thread": sender,
+             "prev_turn_id": None, "mode": mode, "prompt_preview": prompt.strip()[:300]})
     if mode == "gui":
         if a.no_open:
             started = True
@@ -445,16 +462,18 @@ def cmd_start(a):
 
 def cmd_send(a):
     prompt = read_prompt(a)
-    session = None if a.claude_session == "none" else (
-        detect_claude_session() if a.claude_session == "auto" else a.claude_session)
-    text = compose(prompt, session)
+    sender, session = sender_and_session(a)
+    if sender and a.thread == sender:
+        die("нельзя отправлять сообщение в собственный тред: ответ просто дай в этом ходе")
+    text = compose(prompt, session, sender)
     mode = bridge_mode()
     with connect(mode) as s:
         lt = latest_turn(s, a.thread, full=False)
         prev = lt.get("id") if lt else None
         busy = lt is not None and turn_state(lt) == "inProgress"
         journal({"event": "send", "thread_id": a.thread, "claude_session": session,
-                 "prev_turn_id": prev, "mode": mode, "prompt_preview": prompt.strip()[:300]})
+                 "from_thread": sender, "prev_turn_id": prev, "mode": mode,
+                 "prompt_preview": prompt.strip()[:300]})
         if mode == "shared":
             loaded = s.call("thread/loaded/list", {}).get("data") or []
             if a.thread not in loaded:
@@ -550,7 +569,8 @@ def cmd_read(a):
         for it in t.get("items", []):
             if it.get("type") == "userMessage":
                 txt = user_text(it)
-                who = "Claude" if txt.startswith(HEADER) else "Пользователь"
+                who = ("Claude" if txt.startswith(HEADER) else
+                       "Агент Codex" if txt.startswith(CODEX_HEADER) else "Пользователь")
                 print(f"\n### {who}:\n{txt[:a.max_chars]}")
         if a.items:
             lines = [l for l in (item_line(i) for i in t.get("items", [])) if l]
@@ -624,17 +644,18 @@ def busy_commands():
     return out
 
 
-def cmd_running(a):
-    """Треды Codex (любые, не только мои), в которых сейчас идёт ход. Ход без записанного
-    времени завершения, но без активности > 10 мин и без выполняющихся команд считается
-    оборванным (например, приложение закрыли посреди хода) и выводится в stderr."""
+def running_threads(hours: float = 6):
+    """(живые, оборванные): треды с незавершённым ходом. Ход без completedAt, но без
+    активности > 10 мин и без выполняющихся команд считается оборванным (например,
+    приложение закрыли посреди хода)."""
     now = time.time()
     commands = busy_commands()
+    live, stale = [], []
     with connect() as s:
         r = s.call("thread/list", {"limit": 40, "sortKey": "updated_at"})
         for t in r.get("data", []):
             upd = t.get("updatedAt") or 0
-            if now - upd > a.hours * 3600:
+            if now - upd > hours * 3600:
                 continue
             d = s.call("thread/turns/list", {"threadId": t["id"], "limit": 1, "sortDirection": "desc",
                                              "itemsView": "notLoaded"}).get("data") or []
@@ -642,10 +663,37 @@ def cmd_running(a):
                 continue
             title = " ".join((t.get("name") or t.get("preview") or "").split())[:60]
             if now - upd <= STALE_SECONDS or commands:
-                print(f"{t['id']}  {title}")
+                live.append((t["id"], title))
             else:
-                print(f"оборванный ход (нет активности {int((now - upd) // 60)} мин): {t['id']}  {title}",
-                      file=sys.stderr)
+                stale.append((t["id"], title, int((now - upd) // 60)))
+    return live, stale
+
+
+def cmd_running(a):
+    """Треды Codex (любые, не только мои), в которых сейчас идёт ход; оборванные — в stderr."""
+    live, stale = running_threads(a.hours)
+    for tid, title in live:
+        print(f"{tid}  {title}")
+    for tid, title, mins in stale:
+        print(f"оборванный ход (нет активности {mins} мин): {tid}  {title}", file=sys.stderr)
+
+
+def cmd_reload_mcp(a):
+    """Перечитать MCP-серверы на общем сервере. Перезапускает MCP во ВСЕХ загруженных тредах
+    и рвёт идущие ходы (2026-11-09 так упали две задачи) — поэтому только когда ничего не идёт."""
+    if bridge_mode() != "shared":
+        die("только для общего режима; в обычном Codex сам подхватит MCP в новых тредах")
+    if not a.force:
+        live, stale = running_threads()
+        if live or stale:
+            for tid, title in live:
+                print(f"  идёт: {tid}  {title}", file=sys.stderr)
+            for tid, title, mins in stale:
+                print(f"  незавершённый ход ({mins} мин без активности): {tid}  {title}", file=sys.stderr)
+            die("в Codex есть незавершённые ходы — перезагрузка MCP их оборвёт. Дождись или --force", 2)
+    with SharedServer() as s:
+        s.call("config/mcpServer/reload", None, timeout=120)
+    print("MCP-серверы перечитаны")
 
 
 def cmd_mode(a):
@@ -781,11 +829,12 @@ def cmd_links(a):
     by_session: dict[str, list] = {}
     for e in read_journal():
         if e.get("event") == "start":
-            by_session.setdefault(e.get("claude_session") or "?", []).append(e)
+            key = e.get("claude_session") or (f"codex:{e['from_thread']}" if e.get("from_thread") else "?")
+            by_session.setdefault(key, []).append(e)
     for sid, evs in by_session.items():
         if a.claude_session and not sid.startswith(a.claude_session):
             continue
-        print(f"Чат Claude {sid}:")
+        print(f"Агент Codex {sid[6:]}:" if sid.startswith("codex:") else f"Чат Claude {sid}:")
         for e in evs:
             print(f"  {e['ts'][:16]}  {e['thread_id']}  {e.get('model')}·{e.get('effort')}  {e.get('title')}")
 
@@ -824,6 +873,10 @@ def main():
 
     sp = sub.add_parser("mode", help="в каком режиме работает мост (shared | gui)")
     sp.set_defaults(fn=cmd_mode)
+
+    sp = sub.add_parser("reload-mcp", help="перечитать MCP-серверы на общем сервере (если ничего не идёт)")
+    sp.add_argument("--force", action="store_true", help="даже если идут ходы (оборвёт их)")
+    sp.set_defaults(fn=cmd_reload_mcp)
 
     sp = sub.add_parser("running", help="треды Codex, в которых сейчас идёт ход")
     sp.add_argument("--hours", type=float, default=6, help="смотреть треды, обновлённые за N часов")

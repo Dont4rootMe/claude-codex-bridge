@@ -32,8 +32,16 @@ case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "добавьте в ~/.zshrc: export PATH=\"$BIN:\$PATH\"" ;;
 esac
-if [ ! -x /Applications/Codex.app/Contents/Resources/codex-cli/bin/codex ]; then
+CODEX_CLI=/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex
+if [ ! -x "$CODEX_CLI" ]; then
   echo "внимание: не найдено приложение Codex (/Applications/Codex.app)" >&2
+else
+  echo "MCP для Codex:"
+  if "$CODEX_CLI" mcp get codex_runtime >/dev/null 2>&1; then
+    echo "  codex_runtime уже зарегистрирован"
+  else
+    "$CODEX_CLI" mcp add codex_runtime -- "$REPO/runtime_mcp.py" && echo "  codex_runtime -> $REPO/runtime_mcp.py"
+  fi
 fi
 
 cat <<EOF
