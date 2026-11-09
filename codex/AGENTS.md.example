@@ -26,9 +26,10 @@
   пользователь может следить) или **сообщение в другой существующий тред** — через
   мост `codex-bridge` (он в PATH):
   - `codex-bridge start --title "..." --cwd <папка> --model terra|sol --effort <...> --prompt-file <файл>`
-    — модель по правилу пользователя: рутина `terra` (medium/xhigh/ultra), обычная
-    сложная работа `sol` (xhigh/max/ultra); `astra` — только если пользователь
-    явно разрешил;
+    — модель по правилу пользователя: минимально достаточный уровень, лимиты конечны.
+    Простое — `terra` · medium (high/xhigh — если нужна аккуратность); обычное и
+    сложное — `sol` · high/xhigh, трудное — max, самое трудное — ultra; `astra` —
+    только если пользователь явно разрешил;
   - `codex-bridge send <thread> --prompt "..."`, `codex-bridge wait <thread> ...`,
     `codex-bridge read <thread> --last 1`, `codex-bridge list --search "..."`.
   - Мост сам подпишет сообщение `[Codex → Codex]` с id твоего треда (`$CODEX_THREAD_ID`).
