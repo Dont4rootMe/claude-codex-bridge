@@ -50,7 +50,7 @@ git clone https://github.com/Dont4rootMe/claude-codex-bridge.git ~/projects/clau
 codex-bridge start --title "Починить OOM в загрузчике" --cwd ~/projects/x \
   --model sol --effort xhigh --prompt-file brief.md
 # консилиум: N независимых тредов с брифом эксперта (opinion, critique — только чтение; research — полный доступ)
-codex-bridge consult --kind opinion --n 2 --title "Почему растёт bias" --prompt-file question.md
+codex-bridge consult --kind opinion --n 2 --title "Почему модель недолетает до цели" --prompt-file question.md
 codex-bridge send <thread> --prompt "уточнение"        # следующее сообщение в тот же тред
 codex-bridge wait <t1> <t2> ...                        # дождаться ответов (параллельно)
 codex-bridge read <thread> --last 1 --items            # итог, команды и правки файлов
