@@ -1,0 +1,49 @@
+#!/bin/bash
+# Выключить общий режим: Codex снова работает со своим встроенным сервером.
+#   codex-shared-off                 убрать постоянный режим и перезапустить Codex в обычном
+#   codex-shared-off --stop-server   то же + остановить и удалить общий сервер
+#   --force                          перезапустить Codex, даже если в нём идут задачи
+# Включить обратно: codex-shared-on
+set -euo pipefail
+U=$(id -u)
+LA="$HOME/Library/LaunchAgents"
+STOP=0
+FORCE=0
+for a in "$@"; do
+  case "$a" in
+    --stop-server) STOP=1 ;;
+    --force) FORCE=1 ;;
+  esac
+done
+
+launchctl bootout "gui/$U/com.$(id -un).codex-shared-helper" 2>/dev/null || true
+rm -f "$LA/com.$(id -un).codex-shared-helper.plist"
+launchctl unsetenv CODEX_APP_SERVER_WS_URL
+echo "постоянный общий режим выключен"
+
+RELAUNCH=0
+if pgrep -f '/Applications/Codex.app/Contents/MacOS/' >/dev/null; then
+  if [ $FORCE -eq 0 ]; then
+    RUNNING=$("$HOME/.local/bin/codex-bridge" running 2>/dev/null || true)
+    if [ -n "$RUNNING" ]; then
+      echo "в Codex идут задачи — перезапусти его позже сам (или codex-shared-off --force):" >&2
+      echo "$RUNNING" >&2
+      exit 2
+    fi
+  fi
+  osascript -e 'tell application "/Applications/Codex.app" to quit' || true
+  for _ in $(seq 1 60); do pgrep -f '/Applications/Codex.app/Contents/MacOS/' >/dev/null || break; sleep 0.5; done
+  RELAUNCH=1
+fi
+
+if [ $STOP -eq 1 ]; then
+  launchctl bootout "gui/$U/com.$(id -un).codex-shared-server" 2>/dev/null || true
+  rm -f "$LA/com.$(id -un).codex-shared-server.plist"
+  pkill -f 'app-server --analytics-default-enabled .*--listen unix://' || true
+  echo "общий сервер остановлен"
+fi
+
+if [ $RELAUNCH -eq 1 ]; then
+  open -a /Applications/Codex.app
+  echo "Codex запущен в обычном режиме"
+fi

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude: контекст чатов"
+  short_description: "Читать чаты Claude и связи с тредами Codex"
+  default_prompt: "Используй $claude-context: найди чат Claude по этой теме и коротко перескажи, что там решили."

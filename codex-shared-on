@@ -1,0 +1,39 @@
+#!/bin/bash
+# Включить постоянный общий режим: приложение Codex при любом запуске (Dock, Spotlight,
+# после обновления) подключается к общему app-server, к которому ходит и codex-bridge.
+# Ставит два LaunchAgent из шаблонов launchd/*.plist.in. Выключить: codex-shared-off
+set -euo pipefail
+REPO="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PREFIX="com.$(id -un)"
+LA="$HOME/Library/LaunchAgents"
+U=$(id -u)
+mkdir -p "$LA" "$HOME/.codex-bridge"
+chmod 700 "$HOME/.codex-bridge"
+for NAME in codex-shared-server codex-shared-helper; do
+  L="$PREFIX.$NAME"
+  DST="$LA/$L.plist"
+  TMP=$(mktemp)
+  sed -e "s#__LABEL_PREFIX__#$PREFIX#g" -e "s#__HOME__#$HOME#g" -e "s#__REPO__#$REPO#g" \
+      "$REPO/launchd/$NAME.plist.in" > "$TMP"
+  plutil -lint "$TMP" >/dev/null
+  CHANGED=1   # комментарии не в счёт
+  if [ -f "$DST" ] && cmp -s <(sed '/<!--/,/-->/d' "$TMP") <(sed '/<!--/,/-->/d' "$DST"); then CHANGED=0; fi
+  mv "$TMP" "$DST"
+  if ! launchctl print "gui/$U/$L" >/dev/null 2>&1; then
+    launchctl bootstrap "gui/$U" "$DST"
+  elif [ $CHANGED -eq 1 ]; then
+    if [ "$NAME" = codex-shared-helper ]; then
+      launchctl bootout "gui/$U/$L" 2>/dev/null || true
+      launchctl bootstrap "gui/$U" "$DST"
+    else
+      echo "шаблон $L изменился; новая версия применится после перезапуска сервера:"
+      echo "  launchctl kickstart -k gui/$U/$L   (прервёт идущие задачи Codex)"
+    fi
+  fi
+done
+launchctl kickstart "gui/$U/$PREFIX.codex-shared-helper"
+sleep 1
+echo "постоянный общий режим включён: CODEX_APP_SERVER_WS_URL=$(launchctl getenv CODEX_APP_SERVER_WS_URL)"
+if "$REPO/codex_bridge.py" mode | grep -q 'на своём сервере: да'; then
+  echo "Codex сейчас запущен в обычном режиме — перезапусти его, когда в нём ничего не выполняется"
+fi

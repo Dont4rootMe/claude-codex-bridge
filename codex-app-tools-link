@@ -1,0 +1,13 @@
+#!/bin/bash
+# Направить ~/.codex-bridge/app-tools.sock на текущий служебный канал окна Codex
+# (самый свежий /tmp/codex-app-tools/*.sock текущего пользователя).
+set -euo pipefail
+LINK="$HOME/.codex-bridge/app-tools.sock"
+NEWEST=$(find /tmp/codex-app-tools -maxdepth 1 -type s -user "$(id -u)" -print0 2>/dev/null \
+         | xargs -0 ls -t 2>/dev/null | head -1 || true)
+if [ -z "$NEWEST" ]; then
+  echo "канал окна Codex не найден (Codex не запущен?)" >&2
+  exit 1
+fi
+ln -sfn "$NEWEST" "$LINK"
+echo "$LINK -> $NEWEST"

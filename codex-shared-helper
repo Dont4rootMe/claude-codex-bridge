@@ -1,0 +1,22 @@
+#!/bin/bash
+# Вызывается launchd (com.<пользователь>.codex-shared-helper): при входе в систему и при каждом
+# изменении /tmp/codex-app-tools (окно Codex создаёт там служебный канал при запуске).
+#  1) держит переменную, по которой Codex при любом запуске подключается к общему серверу;
+#  2) направляет ~/.codex-bridge/app-tools.sock на текущий канал окна (инструменты codex_app).
+HOME="${HOME:-/Users/$(id -un)}"
+URL="ws+unix://localhost$HOME/.codex-bridge/app-server.sock:/rpc"
+if [ "$(launchctl getenv CODEX_APP_SERVER_WS_URL)" != "$URL" ]; then
+  launchctl setenv CODEX_APP_SERVER_WS_URL "$URL"
+fi
+"$(dirname "$(readlink -f "$0")")/codex-app-tools-link" || true
+
+# После обновления Codex приложение запускается новой версией, а общий сервер всё ещё
+# работает на старом бинарнике — перезапустить сервер, чтобы версии совпали.
+BIN=/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex
+STARTED_FILE="$HOME/.codex-bridge/server.started"
+if [ -f "$STARTED_FILE" ] && [ -x "$BIN" ]; then
+  if [ "$(stat -f %m "$BIN")" -gt "$(cat "$STARTED_FILE")" ]; then
+    echo "$(date '+%F %T') Codex обновлён — перезапускаю общий сервер"
+    launchctl kickstart -k "gui/$(id -u)/com.$(id -un).codex-shared-server" || true
+  fi
+fi

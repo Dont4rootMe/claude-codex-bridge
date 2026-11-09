@@ -1,0 +1,52 @@
+#!/bin/bash
+# Перезапустить приложение Codex в общем режиме: окно подключается к общему app-server
+# (~/.codex-bridge/app-server.sock), к которому подключается и codex-bridge.
+# Обратно в обычный режим: codex-shared-off.
+set -euo pipefail
+DIR="$HOME/.codex-bridge"
+SOCK="$DIR/app-server.sock"
+URL="ws+unix://localhost$SOCK:/rpc"
+AGENT="gui/$(id -u)/com.$(id -un).codex-shared-server"
+BRIDGE="$HOME/.local/bin/codex-bridge"
+
+server_alive() { "$BRIDGE" mode 2>/dev/null | grep -q 'общий сервер.*работает'; }
+
+if ! server_alive; then
+  if launchctl print "$AGENT" >/dev/null 2>&1; then
+    launchctl kickstart -k "$AGENT"
+  else
+    nohup "$HOME/projects/claude-codex-bridge/shared-server.sh" >"$DIR/app-server.log" 2>&1 &
+  fi
+  for _ in $(seq 1 40); do server_alive && break; sleep 0.5; done
+  server_alive || { echo "общий сервер не поднялся, см. $DIR/app-server.log" >&2; exit 1; }
+fi
+
+if pgrep -f '/Applications/Codex.app/Contents/MacOS/' >/dev/null; then
+  if [ "${1:-}" != "--force" ]; then
+    RUNNING=$("$BRIDGE" running 2>/dev/null || true)
+    if [ -n "$RUNNING" ]; then
+      echo "в Codex сейчас выполняются задачи — перезапуск их прервёт:" >&2
+      echo "$RUNNING" >&2
+      echo "дождись их или запусти с --force" >&2
+      exit 2
+    fi
+  fi
+  osascript -e 'tell application "/Applications/Codex.app" to quit' || true
+  for _ in $(seq 1 60); do pgrep -f '/Applications/Codex.app/Contents/MacOS/' >/dev/null || break; sleep 0.5; done
+fi
+
+STAMP=$(date +%s)
+open -a /Applications/Codex.app --env "CODEX_APP_SERVER_WS_URL=$URL"
+echo "Codex запущен в общем режиме ($URL)"
+
+# Окно создаёт новый служебный канал для инструментов приложения — направить на него ссылку.
+LINKER="$(dirname "$(readlink -f "$0")")/codex-app-tools-link"
+for _ in $(seq 1 60); do
+  NEWEST=$(find /tmp/codex-app-tools -maxdepth 1 -type s -user "$(id -u)" -print0 2>/dev/null \
+           | xargs -0 stat -f '%m %N' 2>/dev/null | sort -rn | head -1 || true)
+  if [ -n "$NEWEST" ] && [ "${NEWEST%% *}" -ge "$STAMP" ]; then
+    "$LINKER"
+    break
+  fi
+  sleep 0.5
+done
