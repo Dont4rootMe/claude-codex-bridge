@@ -456,8 +456,62 @@ def cmd_start(a):
     print(json.dumps(out, ensure_ascii=False) if a.json else
           f"✓ {a.title}\n  thread: {tid}\n  {model} · {effort} · {cwd}\n  {out['link']}"
           + ("" if started else "\n  ⚠ приложение пока не взяло задачу (проверь, что Codex открыт)"))
+    if getattr(a, "_return_out", False):
+        return out
     if a.wait:
         return wait_threads([tid], a.timeout, a.json)
+
+
+CONSULT_KINDS = {
+    "opinion": ("Мнение", "read-only",
+                "Нужно твоё независимое экспертное мнение. Тебя опрашивают параллельно с другими "
+                "экспертами, и мнения сравнят, поэтому ценно именно независимое суждение, а не "
+                "угадывание ожидаемого ответа.\n\nРазбери вопрос сам, с нуля. Ищи и проверяй "
+                "источники в интернете, если это помогает; читай указанные материалы. Ничего не "
+                "меняй в файлах.\n\nОтветь так:\n1. Позиция — короткий ответ.\n2. Обоснование — "
+                "по пунктам.\n3. Источники — ссылки и что именно в них сказано.\n4. Альтернативы — "
+                "другие позиции и почему ты их не принимаешь.\n5. Уверенность — низкая / средняя / "
+                "высокая для каждого ключевого утверждения.\n6. Что изменило бы твоё мнение и что "
+                "стоит проверить дальше.\n\nВопрос и материалы:\n"),
+    "critique": ("Критика", "read-only",
+                 "Ты — рецензент (red team). Ниже материал, который готовит Claude. Найди "
+                 "фактические ошибки, необоснованные утверждения, логические дыры, пропущенные "
+                 "альтернативы и источники, слабые места методологии. Проверяй утверждения по "
+                 "источникам, если это помогает. Ничего не меняй в файлах и не переписывай текст "
+                 "целиком.\n\nДля каждого замечания: где, в чём проблема, насколько важно "
+                 "(критично / существенно / мелочь), как исправить. В конце — три самых важных "
+                 "замечания.\n\nМатериал:\n"),
+    "research": ("Исследование", "danger-full-access",
+                 "Это параллельный исследовательский трек: Claude ведёт свой анализ, а ты глубоко и "
+                 "самостоятельно прорабатываешь поручение ниже — столько времени, сколько нужно. "
+                 "Ищи источники и проверяй их, при необходимости пиши и запускай код. Не "
+                 "останавливайся на первом найденном.\n\nИтог: главные находки с источниками; что "
+                 "подтверждено, что нет; уровень уверенности; открытые вопросы и что проверить "
+                 "дальше.\n\nПоручение:\n"),
+}
+
+
+def cmd_consult(a):
+    """Консилиум: N тредов Codex с готовым брифом для второго мнения, критики или
+    параллельного исследования. По умолчанию gpt-6-astra/ultra — для этих ролей
+    пользователь разрешил Astra заранее (2026-11-09)."""
+    label, sandbox, wrapper = CONSULT_KINDS[a.kind]
+    body = read_prompt(a)
+    outs = []
+    for k in range(1, a.n + 1):
+        suffix = f" ({k}/{a.n})" if a.n > 1 else ""
+        sa = argparse.Namespace(
+            title=f"{label}: {a.title}{suffix}", cwd=a.cwd, model=a.model, effort=a.effort,
+            astra_approved=True, sandbox=a.sandbox or sandbox, approval="never",
+            no_open=False, open=False, prompt=wrapper + body.strip(), prompt_file=None,
+            claude_session=a.claude_session, wait=False, timeout=a.timeout, json=a.json,
+            _return_out=True)
+        outs.append(cmd_start(sa))
+    ids = " ".join(o["thread_id"] for o in outs)
+    if not a.json:
+        print(f"\nдождаться: codex-bridge wait {ids}")
+    if a.wait:
+        return wait_threads([o["thread_id"] for o in outs], a.timeout, a.json)
 
 
 def cmd_send(a):
@@ -870,6 +924,18 @@ def main():
                     help="режим shared: всё-таки переключить окно Codex на новый тред")
     prompt_args(sp)
     sp.set_defaults(fn=cmd_start)
+
+    sp = sub.add_parser("consult", help="консилиум: второе мнение / критика / параллельное исследование")
+    sp.add_argument("--kind", choices=list(CONSULT_KINDS), default="opinion")
+    sp.add_argument("--title", required=True, help="короткое название вопроса")
+    sp.add_argument("--cwd", default=os.getcwd(), help="папка, где лежат материалы")
+    sp.add_argument("--n", type=int, default=1, help="сколько независимых тредов запустить")
+    sp.add_argument("--model", default="astra")
+    sp.add_argument("--effort", default="ultra")
+    sp.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"],
+                    help="по умолчанию read-only для opinion/critique, полный доступ для research")
+    prompt_args(sp)
+    sp.set_defaults(fn=cmd_consult)
 
     sp = sub.add_parser("mode", help="в каком режиме работает мост (shared | gui)")
     sp.set_defaults(fn=cmd_mode)
