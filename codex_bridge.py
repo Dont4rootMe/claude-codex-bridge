@@ -51,13 +51,14 @@ HEADER = "[Claude → Codex]"
 CODEX_HEADER = "[Codex → Codex]"
 FINAL = {"completed", "failed", "interrupted"}
 
-# Политика моделей пользователя (2026-11-09), одна для исследований и исполнения:
-#   минимально достаточный уровень, а не самый сильный (лимиты Codex быстро кончаются)
-#   простое и механическое   -> gpt-6.1-terra  medium (high/xhigh — если нужна аккуратность)
-#   обычное и сложное        -> gpt-6.1-sol    high | xhigh | max | ultra
-#   сверх этого              -> gpt-6-astra    ТОЛЬКО после явного «да» пользователя
-DEFAULT_MODEL = "gpt-6.1-sol"
-DEFAULT_EFFORT = "xhigh"
+# Политика моделей пользователя (2026-11-11), одна для исследований и исполнения:
+#   по умолчанию gpt-6.1-terra · medium; выше — только когда понятно, почему ниже не справится
+#   terra high/xhigh -> аккуратность; sol medium/high -> нужна самостоятельная мысль;
+#   sol xhigh -> трудное; sol max/ultra -> исключение, нужен --why;
+#   gpt-6-astra -> ТОЛЬКО после явного «да» пользователя (--astra-approved) и с --why
+DEFAULT_MODEL = "gpt-6.1-terra"
+DEFAULT_EFFORT = "medium"
+EXPENSIVE_EFFORTS = {"max", "ultra"}
 MODEL_ALIASES = {"terra": "gpt-6.1-terra", "sol": "gpt-6.1-sol", "astra": "gpt-6-astra",
                  "luna": "gpt-6-luna"}
 EFFORT_ALIASES = {"med": "medium", "hard": "high", "extra": "xhigh", "x-high": "xhigh"}
@@ -351,13 +352,17 @@ def wait_started(s: AppServer, tid: str, prev_turn_id, open_first: bool, grace=1
             lock.close()
 
 
-def resolve_model(model: str, effort: str, astra_approved: bool):
+def resolve_model(model: str, effort: str, astra_approved: bool, why: str | None = None):
     model = MODEL_ALIASES.get(model.lower(), model)
     effort = EFFORT_ALIASES.get(effort.lower(), effort.lower())
     if "astra" in model and not astra_approved:
         die("Astra запускается только после явного согласия пользователя. Спроси его одним "
             "вопросом и предложи уровень («Здесь нужна Astra на <effort>, потому что … Разрешаешь "
             "или Sol на <effort>?»); если разрешил — добавь --astra-approved, иначе sol.", 4)
+    if ("astra" in model or effort in EXPENSIVE_EFFORTS) and not (why or "").strip():
+        die(f"{model} · {effort} — дорогой уровень: укажи --why \"<почему уровень ниже не "
+            f"справится>\". Не можешь сформулировать — возьми уровень ниже (по умолчанию "
+            f"terra · medium).", 5)
     return model, effort
 
 
@@ -417,7 +422,8 @@ def fmt_ts(sec):
 # --------------------------------------------------------------------------- commands
 
 def cmd_start(a):
-    model, effort = resolve_model(a.model, a.effort, a.astra_approved)
+    why = getattr(a, "why", None)
+    model, effort = resolve_model(a.model, a.effort, a.astra_approved, why)
     cwd = os.path.abspath(os.path.expanduser(a.cwd))
     if not os.path.isdir(cwd):
         die(f"нет такой папки: {cwd}")
@@ -445,7 +451,7 @@ def cmd_start(a):
             s.call("thread/name/set", {"threadId": tid, "name": a.title})
         queue_message(tid, compose(prompt, session, sender))
     journal({"event": "start", "thread_id": tid, "title": a.title, "cwd": cwd, "model": model,
-             "effort": effort, "claude_session": session, "from_thread": sender,
+             "effort": effort, "why": why, "claude_session": session, "from_thread": sender,
              "prev_turn_id": None, "mode": mode, "prompt_preview": prompt.strip()[:300]})
     if mode == "gui":
         if a.no_open:
@@ -495,12 +501,8 @@ CONSULT_KINDS = {
 
 def cmd_consult(a):
     """Консилиум: N тредов Codex с готовым брифом для второго мнения, критики или
-    параллельного исследования. Модели по умолчанию нет: её и effort выбирают явно под
-    задачу (минимально достаточные); Astra — только с --astra-approved."""
-    if not a.model or not a.effort:
-        die("укажи --model и --effort под задачу: terra · medium для простого, sol · high/xhigh "
-            "для обычного, sol · max/ultra для трудного; astra — только с разрешения "
-            "пользователя (--astra-approved)", 2)
+    параллельного исследования. По умолчанию terra · medium, как и у start; дорогие
+    уровни — с --why, Astra — только с --astra-approved."""
     label, sandbox, wrapper = CONSULT_KINDS[a.kind]
     body = read_prompt(a)
     outs = []
@@ -508,7 +510,7 @@ def cmd_consult(a):
         suffix = f" ({k}/{a.n})" if a.n > 1 else ""
         sa = argparse.Namespace(
             title=f"{label}: {a.title}{suffix}", cwd=a.cwd, model=a.model, effort=a.effort,
-            astra_approved=a.astra_approved, sandbox=a.sandbox or sandbox, approval="never",
+            astra_approved=a.astra_approved, why=a.why, sandbox=a.sandbox or sandbox, approval="never",
             no_open=False, open=False, prompt=wrapper + body.strip(), prompt_file=None,
             claude_session=a.claude_session, wait=False, timeout=a.timeout, json=a.json,
             _return_out=True)
@@ -917,9 +919,10 @@ def main():
     sp = sub.add_parser("start", help="новый тред-задача в Codex")
     sp.add_argument("--title", required=True)
     sp.add_argument("--cwd", required=True, help="папка проекта")
-    sp.add_argument("--model", default=DEFAULT_MODEL, help="terra | sol | astra | полный slug")
+    sp.add_argument("--model", default=DEFAULT_MODEL, help="terra (по умолчанию) | sol | astra | полный slug")
     sp.add_argument("--effort", default=DEFAULT_EFFORT,
-                    help="medium (med) | high (hard) | xhigh (extra) | max | ultra")
+                    help="medium/med (по умолчанию) | high/hard | xhigh/extra | max | ultra")
+    sp.add_argument("--why", help="обязательно для max/ultra и Astra: почему уровень ниже не справится")
     sp.add_argument("--astra-approved", action="store_true",
                     help="пользователь явно разрешил Astra для этой задачи")
     sp.add_argument("--sandbox", default="danger-full-access",
@@ -937,8 +940,10 @@ def main():
     sp.add_argument("--title", required=True, help="короткое название вопроса")
     sp.add_argument("--cwd", default=os.getcwd(), help="папка, где лежат материалы")
     sp.add_argument("--n", type=int, default=1, help="сколько независимых тредов запустить")
-    sp.add_argument("--model", help="обязательно: terra | sol | astra (с --astra-approved)")
-    sp.add_argument("--effort", help="обязательно: medium (med) | high (hard) | xhigh (extra) | max | ultra")
+    sp.add_argument("--model", default=DEFAULT_MODEL, help="terra (по умолчанию) | sol | astra")
+    sp.add_argument("--effort", default=DEFAULT_EFFORT,
+                    help="medium/med (по умолчанию) | high/hard | xhigh/extra | max | ultra")
+    sp.add_argument("--why", help="обязательно для max/ultra и Astra: почему уровень ниже не справится")
     sp.add_argument("--astra-approved", action="store_true",
                     help="пользователь явно разрешил Astra для этой задачи")
     sp.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"],

@@ -25,8 +25,13 @@ for c in codex-shared-on codex-shared-off codex-shared-launch; do
   link "$REPO/$c" "$BIN/$c"
 done
 echo "скиллы:"
-link "$REPO/claude/skills/codex-teamlead" "$HOME/.claude/skills/codex-teamlead"
+link "$REPO/claude/skills/codex" "$HOME/.claude/skills/codex"
 link "$REPO/codex/skills/claude-context" "$HOME/.codex/skills/claude-context"
+# старое имя скилла (до 2026-11-11) — убрать ссылку, если она вела в этот репозиторий
+OLD="$HOME/.claude/skills/codex-teamlead"
+if [ -L "$OLD" ] && case "$(readlink "$OLD")" in "$REPO"/*) true ;; *) false ;; esac; then
+  rm "$OLD" && echo "  удалена старая ссылка $OLD"
+fi
 
 case ":$PATH:" in
   *":$BIN:"*) ;;

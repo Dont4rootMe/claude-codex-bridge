@@ -1,8 +1,9 @@
 # claude-codex-bridge
 
-Мост между **Claude Code** и приложением **Codex** (macOS). Глубокую работу — исследования,
-ревью, анализ, научные тексты — Claude делает сам, а агентов Codex использует как своих
-субагентов:
+Мост между **Claude Code** и приложением **Codex** (macOS). Codex подключается по
+включению: скилл `codex` (`/codex` в начале разговора или «используй Codex») — и до конца
+разговора. В этом режиме глубокую работу — исследования, ревью, анализ, научные тексты —
+Claude делает сам, а агентов Codex использует как своих субагентов:
 - **по усмотрению Claude** (`codex-bridge consult`) — отдать часть глубокой задачи или
   продублировать её ради независимого мнения и критики;
 - **исполнители** (`codex-bridge start`) — код, баги, эксперименты, окружения.
@@ -22,8 +23,8 @@
 |---|---|
 | `codex_bridge.py` | команда `codex-bridge`: ставить задачи, ждать, читать треды Codex и чаты Claude |
 | `wsunix.py` | минимальный WebSocket-клиент поверх unix-сокета (для общего режима) |
-| `claude/skills/codex-teamlead/` | скилл Claude Code: когда и как делегировать в Codex, выбор модели, приёмка |
-| `claude/CLAUDE.md.example` | шаблон глобального правила для `~/.claude/CLAUDE.md` |
+| `claude/skills/codex/` | скилл Claude Code `/codex`: режим работы с Codex — роли, выбор модели, протокол, приёмка |
+| `claude/CLAUDE.md.example` | шаблон глобального правила для `~/.claude/CLAUDE.md` (Codex — только по включению) |
 | `codex/skills/claude-context/` | скилл Codex: читать чаты Claude и связи «чат → треды» |
 | `codex/AGENTS.md.example` | шаблон для `~/.codex/AGENTS.md`: поручения `[Claude → Codex]`, «Отчёт для Claude» |
 | `shared-server.sh`, `codex-shared-*`, `codex-app-tools-link`, `gui-connected`, `launchd/` | общий режим (необязательно) |
@@ -48,10 +49,11 @@ git clone https://github.com/Dont4rootMe/claude-codex-bridge.git ~/projects/clau
 
 ```bash
 # новая задача — новый тред в Codex (промпт лучше из файла)
-codex-bridge start --title "Починить OOM в загрузчике" --cwd ~/projects/x \
-  --model sol --effort xhigh --prompt-file brief.md
+codex-bridge start --title "Свести метрики прогонов в таблицу" --cwd ~/projects/x \
+  --prompt-file brief.md                                 # по умолчанию terra · medium
 # консилиум: N независимых тредов с брифом эксперта (opinion, critique — только чтение; research — полный доступ)
-codex-bridge consult --kind opinion --n 2 --title "Почему модель недолетает до цели" --prompt-file question.md
+codex-bridge consult --kind opinion --n 2 --model sol --effort high \
+  --title "Почему модель недолетает до цели" --prompt-file question.md
 codex-bridge send <thread> --prompt "уточнение"        # следующее сообщение в тот же тред
 codex-bridge wait <t1> <t2> ...                        # дождаться ответов (параллельно)
 codex-bridge read <thread> --last 1 --items            # итог, команды и правки файлов
@@ -73,10 +75,12 @@ codex-bridge reload-mcp                                # перечитать MC
 уровни — `medium` (`med`), `high` (`hard`), `xhigh` (`extra`), `max`, `ultra`.
 
 Политика моделей (поменяйте под себя в `codex_bridge.py` и в скилле): лимиты Codex
-конечны, поэтому берётся минимально достаточный уровень — `terra` для простого, `sol` с
-`high`…`ultra` для сложного. У `consult` модели по умолчанию нет — её и effort называют
-явно. Astra мост не запустит без `--astra-approved`: её разрешает только пользователь,
-которому Claude предлагает конкретный уровень рассуждений.
+конечны, поэтому по умолчанию — `terra` · `medium` (и у `start`, и у `consult`); выше —
+только когда понятно, почему ниже не справится (`terra` high/xhigh — аккуратность, `sol`
+medium/high — нужна самостоятельная мысль, `sol` xhigh — трудное). `max`/`ultra` и Astra
+мост не запустит без `--why "<почему ниже не справится>"`, а Astra — ещё и без
+`--astra-approved`: её разрешает только пользователь, которому Claude предлагает
+конкретный уровень рассуждений.
 
 ## Два режима
 
