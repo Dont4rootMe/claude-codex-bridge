@@ -52,13 +52,12 @@ CODEX_HEADER = "[Codex → Codex]"
 FINAL = {"completed", "failed", "interrupted"}
 
 # Политика моделей пользователя (2026-11-11), одна для исследований и исполнения:
-#   по умолчанию gpt-6.1-terra · medium; выше — только когда понятно, почему ниже не справится
-#   terra high/xhigh -> аккуратность; sol medium/high -> нужна самостоятельная мысль;
-#   sol xhigh -> трудное; sol max/ultra -> исключение, нужен --why;
-#   gpt-6-astra -> ТОЛЬКО после явного «да» пользователя (--astra-approved) и с --why
+#   Claude выбирает модель и effort в моменте, как своего субагента:
+#   уровень Sonnet -> gpt-6.1-terra; уровень Opus -> gpt-6.1-sol с effort не ниже нужного;
+#   сильнее -> gpt-6-astra ТОЛЬКО после явного «да» пользователя (--astra-approved) и с --why.
+#   Умолчание ниже — лишь страховка, когда модель не названа явно.
 DEFAULT_MODEL = "gpt-6.1-terra"
 DEFAULT_EFFORT = "medium"
-EXPENSIVE_EFFORTS = {"max", "ultra"}
 MODEL_ALIASES = {"terra": "gpt-6.1-terra", "sol": "gpt-6.1-sol", "astra": "gpt-6-astra",
                  "luna": "gpt-6-luna"}
 EFFORT_ALIASES = {"med": "medium", "hard": "high", "extra": "xhigh", "x-high": "xhigh"}
@@ -359,10 +358,9 @@ def resolve_model(model: str, effort: str, astra_approved: bool, why: str | None
         die("Astra запускается только после явного согласия пользователя. Спроси его одним "
             "вопросом и предложи уровень («Здесь нужна Astra на <effort>, потому что … Разрешаешь "
             "или Sol на <effort>?»); если разрешил — добавь --astra-approved, иначе sol.", 4)
-    if ("astra" in model or effort in EXPENSIVE_EFFORTS) and not (why or "").strip():
-        die(f"{model} · {effort} — дорогой уровень: укажи --why \"<почему уровень ниже не "
-            f"справится>\". Не можешь сформулировать — возьми уровень ниже (по умолчанию "
-            f"terra · medium).", 5)
+    if "astra" in model and not (why or "").strip():
+        die("для Astra укажи --why \"<почему Sol не справится>\" — так же, как объяснял "
+            "пользователю, спрашивая разрешение.", 5)
     return model, effort
 
 
@@ -501,8 +499,9 @@ CONSULT_KINDS = {
 
 def cmd_consult(a):
     """Консилиум: N тредов Codex с готовым брифом для второго мнения, критики или
-    параллельного исследования. По умолчанию terra · medium, как и у start; дорогие
-    уровни — с --why, Astra — только с --astra-approved."""
+    параллельного исследования. Модель и effort выбирают явно, как субагента Claude
+    (Sonnet -> terra, Opus -> sol); умолчание terra · medium — страховка. Astra — только
+    с --astra-approved и --why."""
     label, sandbox, wrapper = CONSULT_KINDS[a.kind]
     body = read_prompt(a)
     outs = []
@@ -922,7 +921,7 @@ def main():
     sp.add_argument("--model", default=DEFAULT_MODEL, help="terra (по умолчанию) | sol | astra | полный slug")
     sp.add_argument("--effort", default=DEFAULT_EFFORT,
                     help="medium/med (по умолчанию) | high/hard | xhigh/extra | max | ultra")
-    sp.add_argument("--why", help="обязательно для max/ultra и Astra: почему уровень ниже не справится")
+    sp.add_argument("--why", help="для Astra (обязательно): почему Sol не справится")
     sp.add_argument("--astra-approved", action="store_true",
                     help="пользователь явно разрешил Astra для этой задачи")
     sp.add_argument("--sandbox", default="danger-full-access",
@@ -943,7 +942,7 @@ def main():
     sp.add_argument("--model", default=DEFAULT_MODEL, help="terra (по умолчанию) | sol | astra")
     sp.add_argument("--effort", default=DEFAULT_EFFORT,
                     help="medium/med (по умолчанию) | high/hard | xhigh/extra | max | ultra")
-    sp.add_argument("--why", help="обязательно для max/ultra и Astra: почему уровень ниже не справится")
+    sp.add_argument("--why", help="для Astra (обязательно): почему Sol не справится")
     sp.add_argument("--astra-approved", action="store_true",
                     help="пользователь явно разрешил Astra для этой задачи")
     sp.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"],

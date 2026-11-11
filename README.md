@@ -50,9 +50,9 @@ git clone https://github.com/Dont4rootMe/claude-codex-bridge.git ~/projects/clau
 ```bash
 # новая задача — новый тред в Codex (промпт лучше из файла)
 codex-bridge start --title "Свести метрики прогонов в таблицу" --cwd ~/projects/x \
-  --prompt-file brief.md                                 # по умолчанию terra · medium
+  --model terra --effort medium --prompt-file brief.md
 # консилиум: N независимых тредов с брифом эксперта (opinion, critique — только чтение; research — полный доступ)
-codex-bridge consult --kind opinion --n 2 --model sol --effort high \
+codex-bridge consult --kind opinion --n 2 --model sol --effort xhigh \
   --title "Почему модель недолетает до цели" --prompt-file question.md
 codex-bridge send <thread> --prompt "уточнение"        # следующее сообщение в тот же тред
 codex-bridge wait <t1> <t2> ...                        # дождаться ответов (параллельно)
@@ -72,15 +72,15 @@ codex-bridge reload-mcp                                # перечитать MC
 Параметры `start` по умолчанию: `--sandbox danger-full-access --approval never` (как
 обычная работа в приложении с полным доступом); для чисто читающих задач —
 `--sandbox read-only`. Модели задаются алиасами `terra`, `sol`, `astra` или полным slug;
-уровни — `medium` (`med`), `high` (`hard`), `xhigh` (`extra`), `max`, `ultra`.
+уровни — `low`, `medium` (`med`), `high` (`hard`), `xhigh` (`extra`), `max`, `ultra`.
 
-Политика моделей (поменяйте под себя в `codex_bridge.py` и в скилле): лимиты Codex
-конечны, поэтому по умолчанию — `terra` · `medium` (и у `start`, и у `consult`); выше —
-только когда понятно, почему ниже не справится (`terra` high/xhigh — аккуратность, `sol`
-medium/high — нужна самостоятельная мысль, `sol` xhigh — трудное). `max`/`ultra` и Astra
-мост не запустит без `--why "<почему ниже не справится>"`, а Astra — ещё и без
-`--astra-approved`: её разрешает только пользователь, которому Claude предлагает
-конкретный уровень рассуждений.
+Политика моделей (поменяйте под себя в скилле): Claude выбирает модель и effort в
+моменте, как своего субагента Claude — где взял бы Sonnet, там `terra`; где взял бы Opus,
+там `sol` с effort не ниже того, на каком думал бы сам (вплоть до `ultra`); решается по
+конкретной задаче, а не по её типу. Модель и effort передаются явно; умолчание моста
+`terra` · `medium` — лишь страховка. Astra мост не запустит без `--astra-approved` и
+`--why`: её разрешает только пользователь, которому Claude предлагает конкретный уровень
+рассуждений.
 
 ## Два режима
 
